@@ -1,0 +1,46 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://github.com/oposs/unspammer/config-schema.json",
+    "title": "Unspammer Config",
+    "description": "Config File for the unspammer tool",
+    "type": "object",
+    "properties": {
+
+        "accounts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["username", "password","imapServer","smtpServer","recipient"],
+                "additionalProperties": false,
+                "properties": {
+                    "username": {
+                        "type": "string",
+                        "description": "The username of the account"
+                    },
+                    "password": {
+                        "type": "string",
+                        "description": "The password of the account"
+                    },
+                    "imapServer": {
+                        "type": "string",
+                        "description": "The imap server and port",
+                        "pattern": "^\\S+:\\d+$"
+                    },
+                    "smtpServer": {
+                        "type": "string",
+                        "description": "The smtp server and port",
+                        "pattern": "^\\S+:\\d+$"
+                    },
+                    "recipient": {
+                        "type": "string",
+                        "description": "The recipient of the spam messages"
+                    }
+                }
+            }
+        }
+    },
+    "required": [
+        "accounts"
+    ],
+    "additionalProperties": false
+}

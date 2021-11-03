@@ -1,0 +1,7 @@
+accounts:
+  -
+    username: "imap-login"
+    password: "imap-password"
+    imapServer: "myserver:993"
+    smtpServer: "myserver:25"
+    recipient: "blessed-recipient@domain"
