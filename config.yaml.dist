@@ -4,4 +4,9 @@ accounts:
     password: "imap-password"
     imapServer: "myserver:993"
     smtpServer: "myserver:25"
-    recipient: "blessed-recipient@domain"
+    inbox: "INBOX"
+    deleteOriginal: true
+    # optional
+    forwardTo: "blessed-recipient@domain"
+    # optional
+    outbox: "INBOX"

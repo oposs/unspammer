@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/smtp"
+	"time"
 
 	"os"
 	"strings"
@@ -61,11 +62,14 @@ type Config struct {
 }
 
 type Account struct {
-	SmtpServer string `yaml:"smtpServer"`
-	Username   string `yaml:"username"`
-	Password   string `yaml:"password"`
-	Recipient  string `yaml:"recipient"`
-	ImapServer string `yaml:"imapServer"`
+	SmtpServer     string `yaml:"smtpServer"`
+	Username       string `yaml:"username"`
+	Password       string `yaml:"password"`
+	ImapServer     string `yaml:"imapServer"`
+	Inbox          string `yaml:"inbox"`
+	DeleteOriginal bool   `yaml:"deleteOriginal"`
+	Outbox         string `yaml:"outbox"`    // optional
+	ForwardTo      string `yaml:"forwardTo"` // optional
 }
 
 func readConfig(cfgFile string) (Config, error) {
@@ -117,12 +121,12 @@ func main() {
 						continue
 					}
 				}
-				if err := <-idlyWaitForMail(c, "INBOX"); err != nil {
+				if err := <-idlyWaitForMail(c, account.Inbox); err != nil {
 					log.Printf("Error waiting for mail: %#v\n", err)
 					c = nil
 					continue
 				}
-				if err := <-moveMail(c, "INBOX", account); err != nil {
+				if err := <-scanMailbox(c, account); err != nil {
 					log.Printf("Error moving mail: %#v\n", err)
 					c = nil
 					continue
@@ -188,15 +192,15 @@ func idlyWaitForMail(c *client.Client, mailbox string) chan error {
 	return errChan
 }
 
-func moveMail(c *client.Client, mailbox string, account Account) chan error {
+func scanMailbox(c *client.Client, account Account) chan error {
 	errChan := make(chan error)
-	log.Println("Moving mail...")
+	log.Printf("scanning %s", account.Inbox)
 	go func() {
 		defer close(errChan)
-		mbox, err := c.Select(mailbox, false)
-		log.Println("Selected mailbox")
+		mbox, err := c.Select(account.Inbox, false)
 		if err != nil {
 			errChan <- err
+			return
 		}
 		from := uint32(1)
 		to := mbox.Messages
@@ -211,50 +215,77 @@ func moveMail(c *client.Client, mailbox string, account Account) chan error {
 		doneFetching := make(chan error, 1)
 		section := &imap.BodySectionName{}
 		section.Peek = true // don't mark the message as read
-		items := []imap.FetchItem{section.FetchItem()}
+		items := []imap.FetchItem{section.FetchItem(), imap.FetchFlags}
 		go func() {
 			doneFetching <- c.Fetch(seqset, items, messages)
 		}()
-
+	nextMessage:
 		for msg := range messages {
-			//log.Printf("Message: %#v\n", msg)
-
+			for _, flag := range msg.Flags {
+				if flag == "unspammer-processed" {
+					log.Println("skip message - already processed")
+					continue nextMessage
+				}
+			}
 			r := msg.GetBody(section)
 			if r == nil {
 				log.Println("Server didn't returned message body")
 				continue
 			}
-			// Create a new mail reader
+			// parse the message header using  the mail reader
 			mr, err := message.Read(r)
 			if err != nil && !message.IsUnknownCharset(err) {
 				log.Println("Reader trouble: ", err)
 				continue
 			}
 
-			// Print some info about the message
 			header := mr.Header
-			if header.Get("X-Spam-Flag") == "YES" {
-				log.Printf("cleaning spam message: %s\n", header.Get("Subject"))
-				rawMessage := new(bytes.Buffer)
-				header.Del("Subject")
-				header.Set("Subject", header.Get("X-Spam-Prev-Subject"))
-				header.Del("X-Spam-Prev-Subject")
-				header.Del("X-Spam-Flag")
-				header.Del("X-Spam-Status")
-				header.Del("X-Spam-Level")
-				header.Del("X-Spam-Checker-Version")
-				header.Del("X-Spam-Report")
-				header.Set("X-Unspammer-Blessing", "BLESSED")
-				returnPath := header.Get("Return-Path")
-				header.Del("Return-Path")
-				textproto.WriteHeader(rawMessage, header.Header)
-				io.Copy(rawMessage, mr.Body)
-				log.Println("re-submitting ...")
-				if err := smtp.SendMail(account.SmtpServer, nil, returnPath, []string{account.Recipient}, rawMessage.Bytes()); err != nil {
+			if header.Get("X-Spam-Flag") != "YES" {
+				continue
+			}
+			subject, _ := header.Text("Subject")
+			log.Printf("cleaning spam message: %s\n", subject)
+			seqset := new(imap.SeqSet)
+			seqset.AddNum(msg.SeqNum)
+			item := imap.FormatFlagsOp(imap.AddFlags, true)
+			flags := []interface{}{"UnSpammer-Processed"}
+			if err := c.Store(seqset, item, flags, nil); err != nil {
+				log.Println("tagging problem: ", err)
+				continue
+			}
+			rawMessage := new(bytes.Buffer)
+			header.Del("Subject")
+			header.Set("Subject", header.Get("X-Spam-Prev-Subject"))
+			header.Del("X-Spam-Prev-Subject")
+			header.Del("X-Spam-Flag")
+			header.Del("X-Spam-Status")
+			header.Del("X-Spam-Level")
+			header.Del("X-Spam-Checker-Version")
+			header.Del("X-Spam-Report")
+			header.Set("X-Unspammer-Blessing", "BLESSED")
+			returnPath := header.Get("Return-Path")
+			header.Del("Return-Path")
+			textproto.WriteHeader(rawMessage, header.Header)
+			io.Copy(rawMessage, mr.Body)
+
+			if account.ForwardTo != "" {
+				log.Printf("forwarding unspammed msg to %s\n", account.ForwardTo)
+				if err := smtp.SendMail(account.SmtpServer, nil, returnPath, []string{account.ForwardTo}, rawMessage.Bytes()); err != nil {
 					log.Println("SMTP problem: ", err)
 					continue
 				}
-
+			}
+			if account.Outbox != "" {
+				log.Printf("storing unspammend msg in: %s\n", account.Outbox)
+				// Append it to INBOX, with two flags
+				flags := []string{"UnSpammer-Generated"}
+				if err := c.Append(account.Outbox, flags, time.Now(), rawMessage); err != nil {
+					log.Println("Storing issue: ", err)
+					continue
+				}
+			}
+			if account.DeleteOriginal {
+				log.Println("removing spam message ...")
 				seqset := new(imap.SeqSet)
 				seqset.AddNum(msg.SeqNum)
 				item := imap.FormatFlagsOp(imap.AddFlags, true)
@@ -263,13 +294,11 @@ func moveMail(c *client.Client, mailbox string, account Account) chan error {
 					log.Println("delete problem: ", err)
 					continue
 				}
-				// Then delete it
-				log.Println("removing message ...")
+
 				if err := c.Expunge(nil); err != nil {
 					log.Println("expunge problem: ", err)
 					continue
 				}
-				//os.Exit(1)
 			}
 		}
 
@@ -280,132 +309,3 @@ func moveMail(c *client.Client, mailbox string, account Account) chan error {
 	}()
 	return errChan
 }
-
-// 		messages := make(chan *imap.Message, 10)
-// 	done = make(chan error, 1)
-// 		for {
-
-// 			if err := c.Move(c.SelectedMailbox(), "INBOX.spam"); err != nil {
-// 				errChan <- err
-// 				return
-// 			}
-// 		}
-// 	}()
-// 	return errChan
-
-// 		// Connect to server
-// 		c, err := client.DialTLS(account.Server, nil)
-// 		if err != nil {
-// 			log.Fatal(err)
-// 			os.Exit(1)
-// 		}
-// 		log.Printf("Connected %s", account.Server)
-// 		// Don't forget to logout
-// 		defer c.Logout()
-// 		// Login
-// 		if err := c.Login(account.Username, account.Password); err != nil {
-// 			log.Fatal(err)
-// 			os.Exit(1)
-// 		}
-// 		log.Println("Logged in")
-// 		// Select a mailbox
-// 		if _, err := c.Select("INBOX", false); err != nil {
-// 			log.Fatal(err)
-// 		}
-
-// 		// Create a channel to receive mailbox updates
-// 		updates := make(chan client.Update)
-// 		c.Updates = updates
-
-// 		stop := make(chan struct{})
-// 		done := make(chan error, 1)
-// 		// Start idling
-// 		go func() {
-// 			done <- c.Idle(stop, nil)
-// 		}()
-// 		// Listen for updates
-
-// 		stopped := false
-// 		for {
-// 			select {
-// 			case update := <-updates:
-// 				switch msg := update.(type) {
-// 				case *client.MailboxUpdate:
-// 					log.Printf("MailboxUpdate: %#v", msg.Mailbox.Name)
-// 					if !stopped {
-// 						close(stop)
-// 						stopped = true
-// 					}
-// 				case *client.MessageUpdate:
-// 					log.Printf("MessageUpdate: %#v", msg.Message)
-// 				case *client.ExpungeUpdate:
-// 					log.Printf("ExpungeUpdate: %#v", msg.SeqNum)
-// 				}
-// 				// if we want to stop after one round
-// 				// if !stopped {
-// 				// 	close(stop)
-// 				// 	stopped = true
-// 				// }
-// 			case err := <-done:
-// 				if err != nil {
-// 					log.Fatal(err)
-// 				}
-// 				log.Println("Stopped Ideling")
-// 			}
-// 		}
-// 	}
-// }
-
-// // Start idling
-// done := make(chan error, 1)
-// 		// List mailboxes
-// 	mailboxes := make(chan *imap.MailboxInfo, 10)
-// 	done := make(chan error, 1)
-// 	go func() {
-// 		done <- c.List("", "*", mailboxes)
-// 	}()
-
-// 	log.Println("Mailboxes:")
-// 	for m := range mailboxes {
-// 		log.Println("* " + m.Name)
-// 	}
-
-// 	if err := <-done; err != nil {
-// 		log.Fatal(err)
-// 	}
-
-// 	// Select INBOX
-// 	mbox, err := c.Select("INBOX", false)
-// 	if err != nil {
-// 		log.Fatal(err)
-// 	}
-// 	log.Println("Flags for INBOX:", mbox.Flags)
-
-// 	// Get the last 4 messages
-// 	from := uint32(1)
-// 	to := mbox.Messages
-// 	if mbox.Messages > 3 {
-// 		// We're using unsigned integers here, only subtract if the result is > 0
-// 		from = mbox.Messages - 3
-// 	}
-// 	seqset := new(imap.SeqSet)
-// 	seqset.AddRange(from, to)
-
-// 	messages := make(chan *imap.Message, 10)
-// 	done = make(chan error, 1)
-
-// 	go func() {
-// 		done <- c.Fetch(seqset, []imap.FetchItem{imap.FetchEnvelope}, messages)
-// 	}()
-
-// 	log.Println("Last 4 messages:")
-// 	for msg := range messages {
-// 		log.Println("* " + msg.Envelope.Subject)
-// 	}
-
-// 	if err := <-done; err != nil {
-// 		log.Fatal(err)
-// 	}
-
-// 	log.Println("Done!")
-// }
