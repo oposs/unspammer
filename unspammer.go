@@ -24,39 +24,6 @@ import (
 //go:embed config-schema.json
 var embedFS embed.FS
 
-// make sure all keys are strings, since this is not necessarily the case
-// in yaml files
-func toStringKeys(val interface{}) (interface{}, error) {
-	switch val := val.(type) {
-	case map[interface{}]interface{}:
-		hash := make(map[string]interface{})
-		for k, v := range val {
-			k, ok := k.(string)
-			if !ok {
-				return nil, errors.New("found non-string key")
-			}
-			var err error
-			hash[k], err = toStringKeys(v)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return hash, nil
-	case []interface{}:
-		var err error
-		list := make([]interface{}, len(val))
-		for i, v := range val {
-			list[i], err = toStringKeys(v)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return list, nil
-	default:
-		return val, nil
-	}
-}
-
 type Config struct {
 	Accounts []Account `yaml:"accounts"`
 }
@@ -102,14 +69,12 @@ func readConfig(cfgFile string) (Config, error) {
 func main() {
 	cfg, err := readConfig("config.yaml")
 	if err != nil {
-		log.Fatalf("Error parsing config.yaml\n%#v", err)
+		log.Fatalf("error parsing config.yaml\n%#v", err)
 		os.Exit(1)
 	}
-	log.Println("Connecting to server...")
 	for _, account := range cfg.Accounts {
-
-		log.Printf("Connected to %s\n", account.ImapServer)
-		done := make(chan int)
+		log.Printf("handle %s's %s on %s\n", account.Username, account.Inbox, account.ImapServer)
+		done := make(chan bool)
 		go func() {
 			var c *client.Client
 			for {
@@ -117,20 +82,37 @@ func main() {
 					var err error
 					c, err = getClient(account)
 					if err != nil {
-						log.Printf("Error connecting to %s: %s\n", account.ImapServer, err)
+						log.Printf("error connecting to %s: %s\n", account.ImapServer, err)
+						c = nil
+						time.Sleep(time.Second * 15)
 						continue
 					}
 				}
-				if err := <-idlyWaitForMail(c, account.Inbox); err != nil {
-					log.Printf("Error waiting for mail: %#v\n", err)
+				select {
+				case err := <-scanMailbox(c, account):
+					if err != nil {
+						log.Printf("error moving mail: %#v\n", err)
+						c = nil
+						continue
+					}
+				case <-time.After(1 * time.Minute):
+					log.Printf("timeout moving mail (%s) reconnect", account.Username)
 					c = nil
 					continue
 				}
-				if err := <-scanMailbox(c, account); err != nil {
-					log.Printf("Error moving mail: %#v\n", err)
+				select {
+				case err := <-idlyWaitForMail(c, account.Inbox):
+					if err != nil {
+						log.Printf("error waiting for mail: %#v\n", err)
+						c = nil
+						continue
+					}
+				case <-time.After(15 * time.Minute):
+					log.Printf("timeout waiting for mail (%s) reconnect", account.Username)
 					c = nil
 					continue
 				}
+
 			}
 		}()
 		<-done
@@ -145,6 +127,7 @@ func getClient(account Account) (*client.Client, error) {
 	if err := c.Login(account.Username, account.Password); err != nil {
 		return nil, err
 	}
+	log.Printf("connected to %s\n", account.ImapServer)
 	// when we're done, close the connection
 	//defer c.Logout()
 
@@ -152,6 +135,7 @@ func getClient(account Account) (*client.Client, error) {
 }
 
 func idlyWaitForMail(c *client.Client, mailbox string) chan error {
+	log.Printf("watch %s for changes", mailbox)
 	errChan := make(chan error)
 	go func() {
 		defer close(errChan)
@@ -174,7 +158,7 @@ func idlyWaitForMail(c *client.Client, mailbox string) chan error {
 			case update := <-updates:
 				switch msg := update.(type) {
 				case *client.MailboxUpdate:
-					log.Printf("MailboxUpdate: %#v", msg.Mailbox.Name)
+					log.Printf("change detected in %s", msg.Mailbox.Name)
 					if !stopped {
 						close(stopIdling)
 						stopped = true
@@ -301,11 +285,41 @@ func scanMailbox(c *client.Client, account Account) chan error {
 				}
 			}
 		}
-
-		if err := <-doneFetching; err != nil {
-			errChan <- err
-		}
-		errChan <- nil
+		errChan <- <-doneFetching
+		log.Println("scanning complete")
 	}()
 	return errChan
+}
+
+// make sure all keys are strings, since this is not necessarily the case
+// in yaml files
+func toStringKeys(val interface{}) (interface{}, error) {
+	switch val := val.(type) {
+	case map[interface{}]interface{}:
+		hash := make(map[string]interface{})
+		for k, v := range val {
+			k, ok := k.(string)
+			if !ok {
+				return nil, errors.New("found non-string key")
+			}
+			var err error
+			hash[k], err = toStringKeys(v)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return hash, nil
+	case []interface{}:
+		var err error
+		list := make([]interface{}, len(val))
+		for i, v := range val {
+			list[i], err = toStringKeys(v)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return list, nil
+	default:
+		return val, nil
+	}
 }
