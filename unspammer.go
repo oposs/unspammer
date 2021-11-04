@@ -193,8 +193,13 @@ func scanMailbox(c *client.Client, account Account) chan error {
 		}
 		from := uint32(1)
 		to := mbox.Messages
+		if to == 0 {
+			log.Printf("no messages in %s", account.Inbox)
+			errChan <- nil
+			return
+		}
 		// never go for more than 10 messages at a time
-		if mbox.Messages > 10 {
+		if to > 10 {
 			from = mbox.Messages - 10
 		}
 		seqset := new(imap.SeqSet)
