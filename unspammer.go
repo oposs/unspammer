@@ -83,6 +83,7 @@ func main() {
 					c, err = getClient(account)
 					if err != nil {
 						log.Printf("error connecting to %s: %s\n", account.ImapServer, err)
+						c.Close()
 						c = nil
 						time.Sleep(time.Second * 15)
 						continue
@@ -92,11 +93,13 @@ func main() {
 				case err := <-scanMailbox(c, account):
 					if err != nil {
 						log.Printf("error moving mail: %#v\n", err)
+						c.Close()
 						c = nil
 						continue
 					}
 				case <-time.After(1 * time.Minute):
 					log.Printf("timeout moving mail (%s) reconnect", account.Username)
+					c.Close()
 					c = nil
 					continue
 				}
@@ -104,11 +107,13 @@ func main() {
 				case err := <-idlyWaitForMail(c, account.Inbox):
 					if err != nil {
 						log.Printf("error waiting for mail: %#v\n", err)
+						c.Close()
 						c = nil
 						continue
 					}
 				case <-time.After(15 * time.Minute):
 					log.Printf("timeout waiting for mail (%s) reconnect", account.Username)
+					c.Close()
 					c = nil
 					continue
 				}
@@ -260,7 +265,7 @@ func scanMailbox(c *client.Client, account Account) chan error {
 				}
 			}
 			if account.Outbox != "" {
-				log.Printf("storing unspammend msg in: %s\n", account.Outbox)
+				log.Printf("storing unspammed msg in: %s\n", account.Outbox)
 				// Append it to INBOX, with two flags
 				flags := []string{"UnSpammer-Generated"}
 				if err := c.Append(account.Outbox, flags, time.Now(), rawMessage); err != nil {
