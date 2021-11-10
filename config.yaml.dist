@@ -1,12 +1,27 @@
-accounts:
-  -
-    username: "imap-login"
-    password: "imap-password"
-    imapServer: "myserver:993"
-    smtpServer: "myserver:25"
-    inbox: "INBOX"
-    deleteOriginal: true
-    # optional
-    forwardTo: "blessed-recipient@domain"
-    # optional
-    outbox: "INBOX"
+imapAccounts:
+  tobi:
+    username: "tobi@xxx.ch"
+    password: "asdfasdf"
+    server: "aaa.xxx.ch:993"
+
+smtpAccounts:
+  smtp:
+    server: "bbb.xxx.ch:25"
+
+tasks:
+  tobi-unspam:
+    imapAccount: tobi
+    smtpAccount: smtp
+    watchFolder: INBOX/DeSpamMe
+    selectMessage: spam
+    editCopy: un-spam
+    storeCopyIn: INBOX/UnSpammed
+    deleteMessage: true
+  tobi-rt:
+    imapAccount: tobi
+    smtpAccount: smtp
+    watchFolder: INBOX/UnSpammed
+    selectMessage: ham
+    editCopy: rt-tag
+    storeCopyIn: INBOX/UnSpammed
+    deleteMessage: true

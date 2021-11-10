@@ -4,57 +4,117 @@
     "title": "Unspammer Config",
     "description": "Config file for the unspammer tool",
     "type": "object",
+    "required": [
+        "imapAccounts",
+        "smtpAccounts",
+        "tasks"
+    ],
+    "additionalProperties": false,
     "properties": {
-        "accounts": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["username", "password","imapServer","smtpServer", "inbox","deleteOriginal"],
-                "additionalProperties": false,
-                "properties": {
-                    "username": {
-                        "type": "string",
-                        "description": "The username of the account"
+        "imapAccounts": {
+            "type": "object",
+            "patternProperties": {
+                "^[a-z][-_a-z0-9]*$": {
+                    "type": "object",
+                    "properties": {
+                        "username": {
+                            "type": "string",
+                            "description": "The username of the account"
+                        },
+                        "password": {
+                            "type": "string",
+                            "description": "The password of the account"
+                        },
+                        "server": {
+                            "type": "string",
+                            "description": "The server of the account",
+                            "pattern": "^\\S+:\\d+$"
+                        }
                     },
-                    "password": {
-                        "type": "string",
-                        "description": "The password of the account"
+                    "required": ["username", "password", "server"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "smtpAccounts": {
+            "type": "object",
+            "patternProperties": {
+                "^[a-z][-_a-z0-9]*$": {
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "string",
+                            "description": "The server of the account",
+                            "pattern": "^\\S+:\\d+$"
+                        }
                     },
-                    "imapServer": {
-                        "type": "string",
-                        "description": "The imap server and port",
-                        "pattern": "^\\S+:\\d+$"
-                    },
-                    "smtpServer": {
-                        "type": "string",
-                        "description": "The smtp server and port",
-                        "pattern": "^\\S+:\\d+$"
-                    },
-                    "forwardTo": {
-                        "type": "string",
-                        "description": "Send the un-spammed message to ...",
-                        "pattern": "^\\S+@\\S+$"
-                    },
-                    "outbox": {
-                        "type": "string",
-                        "description": "Store un-spammed message in this folder",
-                        "pattern": "^.{1,}$"
-                    },
-                    "inbox": {
-                        "type": "string",
-                        "description": "Watch this folder for new messages",
-                        "pattern": "^.{1,}$"
-                    },
-                    "deleteOriginal": {
-                        "type": "boolean",
-                        "description": "Delete the original message after cleaning and handling it"
+                    "required": ["server"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "tasks": {
+            "type": "object",
+            "patternProperties": {
+                "^[a-z][-_a-z0-9]*$": {
+            
+                    "type": "object",
+                    "required": [
+                        "imapAccount",
+                        "smtpAccount",
+                        "watchFolder",
+                        "selectMessage",
+                        "editCopy",
+                        "deleteMessage"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                        
+                        "imapAccount": {
+                            "type": "string",
+                            "description": "reference to entry from imapServer list"
+                        },
+                        "smtpAccount": {
+                            "type": "string",
+                            "description": "reference to entry from smtpServer list"
+                        },
+                        "watchFolder": {
+                            "type": "string",
+                            "description": "Send the un-spammed message to ..."
+                        },
+                        "selectMessage": {
+                            "type": "string",
+                            "description": "which messages to act upon",
+                            "enum": [
+                                "all",
+                                "spam",
+                                "ham"
+                            ]
+                        },
+                        "editCopy": {
+                            "type": "string",
+                            "description": "What edit action to perform on matchin mails",
+                            "enum": [
+                                "un-spam",
+                                "rt-tag",
+                                "no"
+                            ]
+                        },
+                        "storeCopyIn": {
+                            "type": "string",
+                            "description": "Folder for storing the edited message"
+                        },
+                        "forwardCopyTo": {
+                            "type": "string",
+                            "description": "Forward the edited message to ..."
+                        },
+                        "deleteMessage": {
+                            "type": "boolean",
+                            "description": "Delete the matching messages"
+                        }
                     }
                 }
             }
         }
-    },
-    "required": [
-        "accounts"
-    ],
-    "additionalProperties": false
+    }
 }
