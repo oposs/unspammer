@@ -1,7 +1,7 @@
 config.yaml
 unspammer
 .gitignore
-unspammer.exe
-unspammer_*
+unspammer-*
 unspammer
 *.cnt
+*~

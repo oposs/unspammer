@@ -1,6 +1,11 @@
 # unspammer
 
+Unspammer watches IMAP folders of your choice and acts on mail arriving in these folders.
+
+To install unspammer as a service, run `unspammer -config path/to/config.yaml -service install`
 ## Sample Config File
+
+Config formats supported: `yaml`, `json` and `jsonnet`
 
 ```yaml
 imapAccounts:

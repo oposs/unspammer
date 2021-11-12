@@ -3,13 +3,16 @@ package main
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/smtp"
+	"os/signal"
 	"strconv"
 	"time"
 
@@ -20,6 +23,8 @@ import (
 	"github.com/emersion/go-imap/client"
 	"github.com/emersion/go-message"
 	"github.com/emersion/go-message/textproto"
+	"github.com/google/go-jsonnet"
+	"github.com/kardianos/service"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 	"gopkg.in/yaml.v3"
 )
@@ -55,22 +60,102 @@ type Task struct {
 	_client       *client.Client
 }
 
+var sl service.Logger
+
+type program struct{}
+
+func (p *program) Start(s service.Service) error {
+	// Start should not block. Do the actual work async.
+	go p.run()
+	return nil
+}
+
+func (p *program) Stop(s service.Service) error {
+	// Stop should not block. Return with a few seconds.
+	return nil
+}
+
+var cfgPath = flag.String("config", "/etc/unspammer/config.yaml", "config file")
+var jsonetDump = flag.Bool("jsonnetdump", false, "dump generated json to stdout")
+
 func main() {
-	cfg, err := readConfig("config.yaml")
+	svcFlag := flag.String("service", "", "control the system service")
+	flag.Parse()
+	options := make(service.KeyValue)
+	options["Restart"] = "on-success"
+	options["SuccessExitStatus"] = "1 2 8 SIGKILL"
+
+	svcConfig := &service.Config{
+		Name:        "UnSpammer",
+		DisplayName: "UnSpammer the IMAP Robot",
+		Description: "Monitor IMAP folders and process new messages",
+		Dependencies: []string{
+			"Requires=network.target",
+			"After=network-online.target syslog.target"},
+		Option:    options,
+		Arguments: []string{"-config", *cfgPath},
+	}
+
+	prg := &program{}
+	s, err := service.New(prg, svcConfig)
 	if err != nil {
-		log.Fatalf("error parsing config.yaml\n%#v", err)
+		log.Fatal(err)
+	}
+	errs := make(chan error, 5)
+	sl, err = s.Logger(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	go func() {
+		for {
+			err := <-errs
+			if err != nil {
+				log.Print(err)
+			}
+		}
+	}()
+
+	if len(*svcFlag) != 0 {
+		err := service.Control(s, *svcFlag)
+		if err != nil {
+			log.Printf("Valid actions: %q\n", service.ControlAction)
+			log.Fatal(err)
+		}
+		return
+	}
+
+	err = s.Run()
+	if err != nil {
+		sl.Error(err)
+	}
+}
+func (p *program) run() {
+	sl.Infof("Starting UnSpammer on %v.", service.Platform())
+	cfg, err := readConfig(*cfgPath)
+	if err != nil {
+		sl.Errorf("error reading config: %v", err)
 		os.Exit(1)
 	}
 	done := make(chan bool)
+
+	// setup signal catching
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt)
+	go func() {
+		s := <-sigs
+		sl.Infof("RECEIVED SIGNAL: %s", s)
+		done <- true
+	}()
+
 	for taskName, task := range cfg.Tasks {
 		imapAccount := cfg.ImapAccounts[task.ImapAccount]
-		log.Printf("%s: start task handler", taskName)
+		sl.Infof("%s: start task handler", taskName)
 
 		go func(task Task) {
 			for {
 				if task._client == nil {
 					if err := getClient(&task); err != nil {
-						log.Printf("%s: error connecting to %s: %s\n", task._name, imapAccount.Server, err)
+						sl.Infof("%s: error connecting to %s: %s\n", task._name, imapAccount.Server, err)
 						task._client.Close()
 						task._client = nil
 						time.Sleep(time.Second * 15)
@@ -80,13 +165,13 @@ func main() {
 				select {
 				case err := <-scanMailbox(task):
 					if err != nil {
-						log.Printf("%s: error scanning messages: %v", task._name, err)
+						sl.Infof("%s: error scanning messages: %v", task._name, err)
 						task._client.Close()
 						task._client = nil
 						continue
 					}
 				case <-time.After(1 * time.Minute):
-					log.Printf("%s: timeout scanning messages", task._name)
+					sl.Infof("%s: timeout scanning messages", task._name)
 					task._client.Close()
 					task._client = nil
 					continue
@@ -94,13 +179,13 @@ func main() {
 				select {
 				case err := <-watchFolder(task):
 					if err != nil {
-						log.Printf("%s: error watch folder: %v", task._name, err)
+						sl.Infof("%s: error watch folder: %v", task._name, err)
 						task._client.Close()
 						task._client = nil
 						continue
 					}
 				case <-time.After(15 * time.Minute):
-					log.Printf("%s: timeout watch folder", task._name)
+					sl.Infof("%s: timeout watch folder", task._name)
 					task._client.Close()
 					task._client = nil
 					continue
@@ -110,16 +195,46 @@ func main() {
 		}(task)
 	}
 	<-done
+	sl.Info("bye bye")
 }
 
 func readConfig(cfgFile string) (Config, error) {
-	yamlText, _ := ioutil.ReadFile(cfgFile)
-	schemaText, _ := embedFS.ReadFile("config-schema.json")
-	var m interface{}
-	if err := yaml.Unmarshal(yamlText, &m); err != nil {
+
+	cfgString, err := ioutil.ReadFile(cfgFile)
+	if err != nil {
 		return Config{}, err
 	}
-	m, _ = toStringKeys(m)
+
+	schemaText, _ := embedFS.ReadFile("config-schema.json")
+	var m interface{}
+	if strings.HasSuffix(cfgFile, ".yaml") {
+		if err := yaml.Unmarshal(cfgString, &m); err != nil {
+			return Config{}, err
+		}
+		m, _ = toStringKeys(m)
+	}
+	if strings.HasSuffix(cfgFile, ".json") {
+		if err := json.Unmarshal(cfgString, &m); err != nil {
+			return Config{}, err
+		}
+	}
+	var jsonString string
+	if strings.HasSuffix(cfgFile, ".jsonnet") {
+		sl.Infof("compiling jsonnet %s", cfgFile)
+		vm := jsonnet.MakeVM()
+		var err error
+		jsonString, err = vm.EvaluateAnonymousSnippet(
+			cfgFile, string(cfgString))
+		if err != nil {
+			return Config{}, err
+		}
+		if *jsonetDump {
+			sl.Infof("json: %s", jsonString)
+		}
+		if err := json.Unmarshal([]byte(jsonString), &m); err != nil {
+			return Config{}, err
+		}
+	}
 
 	compiler := jsonschema.NewCompiler()
 	if err := compiler.AddResource("schema.json",
@@ -135,7 +250,23 @@ func readConfig(cfgFile string) (Config, error) {
 		return Config{}, err
 	}
 	config := Config{}
-	err = yaml.Unmarshal(yamlText, &config)
+
+	if strings.HasSuffix(cfgFile, ".yaml") {
+		if err := yaml.Unmarshal(cfgString, &config); err != nil {
+			return Config{}, err
+		}
+	}
+	if strings.HasSuffix(cfgFile, ".json") {
+		if err := json.Unmarshal(cfgString, &config); err != nil {
+			return Config{}, err
+		}
+	}
+	if strings.HasSuffix(cfgFile, ".jsonnet") {
+		if err := json.Unmarshal([]byte(jsonString), &config); err != nil {
+			return Config{}, err
+		}
+	}
+
 	for taskName := range config.Tasks {
 		// make sure we have write access
 		if task, ok := config.Tasks[taskName]; ok {
@@ -164,7 +295,7 @@ func getClient(task *Task) error {
 	if err := c.Login(account.Username, account.Password); err != nil {
 		return err
 	}
-	log.Printf("%s: connected to %s", task._name, account.Server)
+	sl.Infof("%s: connected to %s", task._name, account.Server)
 	// when we're done, close the connection
 	//defer c.Logout()
 
@@ -174,7 +305,7 @@ func getClient(task *Task) error {
 func watchFolder(task Task) chan error {
 	mailbox := task.WatchFolder
 	c := task._client
-	log.Printf("%s: watch %s for changes", task._name, mailbox)
+	sl.Infof("%s: watch %s for changes", task._name, mailbox)
 	errChan := make(chan error)
 	go func() {
 		defer close(errChan)
@@ -197,7 +328,7 @@ func watchFolder(task Task) chan error {
 			case update := <-updates:
 				switch msg := update.(type) {
 				case *client.MailboxUpdate:
-					log.Printf("%s: change detected in %s", task._name, msg.Mailbox.Name)
+					sl.Infof("%s: change detected in %s", task._name, msg.Mailbox.Name)
 					if !stopped {
 						close(stopIdling)
 						stopped = true
@@ -205,7 +336,7 @@ func watchFolder(task Task) chan error {
 					}
 				}
 			case err := <-idlingStopped:
-				log.Printf("%s: idling stopped", task._name)
+				sl.Infof("%s: idling stopped", task._name)
 				c.Updates = nil
 				errChan <- err
 				return
@@ -218,7 +349,7 @@ func watchFolder(task Task) chan error {
 func scanMailbox(task Task) chan error {
 	c := task._client
 	errChan := make(chan error)
-	log.Printf("%s: scanning %s", task._name, task.WatchFolder)
+	sl.Infof("%s: scanning %s", task._name, task.WatchFolder)
 	go func() {
 		defer close(errChan)
 		mbox, err := c.Select(task.WatchFolder, false)
@@ -229,7 +360,7 @@ func scanMailbox(task Task) chan error {
 		from := uint32(1)
 		to := mbox.Messages
 		if to == 0 {
-			log.Printf("%s: no messages in %s", task._name, task.WatchFolder)
+			sl.Infof("%s: no messages in %s", task._name, task.WatchFolder)
 			errChan <- nil
 			return
 		}
@@ -262,13 +393,13 @@ func scanMailbox(task Task) chan error {
 			}
 			r := msg.GetBody(section)
 			if r == nil {
-				log.Printf("%s: server didn't returned message body", task._name)
+				sl.Infof("%s: server didn't returned message body", task._name)
 				continue
 			}
 			// parse the message header using  the mail reader
 			mr, err := message.Read(r)
 			if err != nil && !message.IsUnknownCharset(err) {
-				log.Printf("%s: reader trouble: %v", task._name, err)
+				sl.Infof("%s: reader trouble: %v", task._name, err)
 				continue
 			}
 
@@ -286,12 +417,12 @@ func scanMailbox(task Task) chan error {
 			case "all":
 				// do nothing
 			}
-			log.Printf("handling message: %s\n", subject)
+			sl.Infof("%s: handling message: %s", task._name, subject)
 
 			switch task.EditCopy {
 			case "rt-tag":
 				if err := addRtNumber(task, msg, mr); err != nil {
-					log.Printf("%s: error adding RT number: %v", task._name, err)
+					sl.Infof("%s: error adding RT number: %v", task._name, err)
 					continue
 				}
 			case "un-spam":
@@ -302,34 +433,34 @@ func scanMailbox(task Task) chan error {
 			}
 
 			if err := addMessageFlag(task, msg, "usp-"+task._name); err != nil {
-				log.Printf("%s: tagging problem: %v", task._name, err)
+				sl.Infof("%s: tagging problem: %v", task._name, err)
 				continue
 			}
 
 			if task.ForwardCopyTo != "" {
-				log.Printf("%s: forwarding msg to %s\n", task._name, task.ForwardCopyTo)
+				sl.Infof("%s: forwarding msg to %s\n", task._name, task.ForwardCopyTo)
 				if err := forwardMessage(task, mr); err != nil {
-					log.Printf("%s: SMTP problem: %v", task._name, err)
+					sl.Infof("%s: SMTP problem: %v", task._name, err)
 					continue
 				}
 			}
 			if task.StoreCopyIn != "" {
-				log.Printf("%s: storing unspammed msg in: %s\n", task._name, task.StoreCopyIn)
+				sl.Infof("%s: storing unspammed msg in: %s\n", task._name, task.StoreCopyIn)
 				if err := saveMessage(task, mr, oldFlags); err != nil {
-					log.Printf("%s: storing issue: %v", task._name, err)
+					sl.Infof("%s: storing issue: %v", task._name, err)
 					continue
 				}
 			}
 			if task.DeleteMessage {
-				log.Printf("%s: removing message ...", task._name)
+				sl.Infof("%s: removing message ...", task._name)
 				if err := deleteMsg(task, msg.Uid); err != nil {
-					log.Printf("%s: expunge problem: %v", task._name, err)
+					sl.Infof("%s: expunge problem: %v", task._name, err)
 					continue
 				}
 			}
 		}
 		errChan <- <-doneFetching
-		log.Printf("%s: scanning complete", task._name)
+		sl.Infof("%s: scanning complete", task._name)
 	}()
 	return errChan
 }
@@ -340,7 +471,7 @@ func addMessageFlag(task Task, msg *imap.Message, flag string) error {
 	seqset.AddNum(msg.Uid)
 	item := imap.FormatFlagsOp(imap.AddFlags, true)
 	flags := []interface{}{flag}
-	log.Printf("%s: adding flag %s to message %d", task._name, flag, msg.Uid)
+	sl.Infof("%s: adding flag %s to message %d", task._name, flag, msg.Uid)
 	return c.UidStore(seqset, item, flags, nil)
 }
 
@@ -379,7 +510,7 @@ func addRtNumber(task Task, msg *imap.Message, mr *message.Entity) error {
 	if strings.HasPrefix(subject, "[RT #") {
 		return nil
 	}
-	log.Println("adding RT number to:", subject)
+	sl.Infof("%s: adding RT number", task._name)
 	rtCounterFile := fmt.Sprintf("%s.cnt", task._name)
 	lastNumberInt, err := getLastRtNumber(task)
 	if err != nil {
@@ -427,7 +558,7 @@ func deleteMsg(task Task, msgUid uint32) error {
 	seqset.AddNum(msgUid)
 	item := imap.FormatFlagsOp(imap.AddFlags, true)
 	flags := []interface{}{imap.DeletedFlag}
-	log.Printf("%s: deleting message %d", task._name, msgUid)
+	sl.Infof("%s: deleting message %d", task._name, msgUid)
 	if err := c.UidStore(seqset, item, flags, nil); err != nil {
 		return err
 	}
