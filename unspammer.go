@@ -152,43 +152,46 @@ func (p *program) run() {
 		sl.Infof("%s: start task handler", taskName)
 
 		go func(task Task) {
+		loop:
 			for {
 				if task._client == nil {
 					if err := getClient(&task); err != nil {
 						sl.Infof("%s: error connecting to %s: %s\n", task._name, imapAccount.Server, err)
-						task._client.Close()
+						task._client.Terminate()
 						task._client = nil
 						time.Sleep(time.Second * 15)
-						continue
+						continue loop
 					}
 				}
+				// scan for messages
 				select {
 				case err := <-scanMailbox(task):
 					if err != nil {
 						sl.Infof("%s: error scanning messages: %v", task._name, err)
-						task._client.Close()
+						task._client.Terminate()
 						task._client = nil
-						continue
+						continue loop
 					}
 				case <-time.After(1 * time.Minute):
 					sl.Infof("%s: timeout scanning messages", task._name)
-					task._client.Close()
+					task._client.Terminate()
 					task._client = nil
-					continue
+					continue loop
 				}
+				// wait for folder change
 				select {
 				case err := <-watchFolder(task):
 					if err != nil {
 						sl.Infof("%s: error watch folder: %v", task._name, err)
-						task._client.Close()
+						task._client.Terminate()
 						task._client = nil
-						continue
+						continue loop
 					}
-				case <-time.After(15 * time.Minute):
+				case <-time.After(60 * time.Minute):
 					sl.Infof("%s: timeout watch folder", task._name)
-					task._client.Close()
+					task._client.Terminate()
 					task._client = nil
-					continue
+					continue loop
 				}
 
 			}
@@ -287,6 +290,7 @@ func readConfig(cfgFile string) (Config, error) {
 
 func getClient(task *Task) error {
 	account := task._imapAccount
+	sl.Infof("%s: connecting to %s", task._name, account.Server)
 	c, err := client.DialTLS(account.Server, nil)
 	if err != nil {
 		return err
@@ -295,7 +299,7 @@ func getClient(task *Task) error {
 	if err := c.Login(account.Username, account.Password); err != nil {
 		return err
 	}
-	sl.Infof("%s: connected to %s", task._name, account.Server)
+	sl.Infof("%s: connected", task._name)
 	// when we're done, close the connection
 	//defer c.Logout()
 
