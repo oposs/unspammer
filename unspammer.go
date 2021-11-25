@@ -13,6 +13,7 @@ import (
 	"math/rand"
 	"net/smtp"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -54,6 +55,7 @@ type Task struct {
 	StoreCopyIn   string `yaml:"storeCopyIn"`
 	ForwardCopyTo string `yaml:"forwardCopyTo"`
 	DeleteMessage bool   `yaml:"deleteMessage"`
+	RtTag         string `yaml:"rtTag"`
 	_imapAccount  ImapAccount
 	_smtpAccount  SmtpAccount
 	_name         string
@@ -131,6 +133,9 @@ func main() {
 }
 func (p *program) run() {
 	sl.Infof("Starting UnSpammer on %v.", service.Platform())
+	// status files are stored alongside the config file ... so go there
+	os.Chdir(filepath.Dir(*cfgPath))
+
 	cfg, err := readConfig(*cfgPath)
 	if err != nil {
 		sl.Errorf("error reading config: %v", err)
@@ -170,6 +175,7 @@ func (p *program) run() {
 						sl.Infof("%s: error scanning messages: %v", task._name, err)
 						task._client.Terminate()
 						task._client = nil
+						time.Sleep(time.Second * 15)
 						continue loop
 					}
 				case <-time.After(1 * time.Minute):
@@ -185,6 +191,7 @@ func (p *program) run() {
 						sl.Infof("%s: error watch folder: %v", task._name, err)
 						task._client.Terminate()
 						task._client = nil
+						time.Sleep(time.Second * 15)
 						continue loop
 					}
 				case <-time.After(60 * time.Minute):
@@ -277,7 +284,7 @@ func readConfig(cfgFile string) (Config, error) {
 			task._imapAccount = config.ImapAccounts[task.ImapAccount]
 			task._smtpAccount = config.SmtpAccounts[task.SmtpAccount]
 			if task.EditCopy == "rt-tag" {
-				if _, err := getLastRtNumber(task); err != nil {
+				if _, err := getNextRtKey(task); err != nil {
 					log.Fatalf("%s: %v", taskName, err)
 				}
 			}
@@ -496,35 +503,49 @@ func forwardMessage(task Task, mr *message.Entity) error {
 	return smtp.SendMail(task._smtpAccount.Server, nil, returnPath, []string{task.ForwardCopyTo}, rawMessage.Bytes())
 }
 
-func getLastRtNumber(task Task) (int, error) {
+func getNextRtKey(task Task) (string, error) {
 	rtCounterFile := fmt.Sprintf("%s.cnt", task._name)
-	lastNumber, err := os.ReadFile(rtCounterFile)
+	lastKey, err := os.ReadFile(rtCounterFile)
+	thisYear := strconv.Itoa(time.Now().Year() - 2000)
+
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	lastNumberInt, err := strconv.Atoi(strings.TrimSpace(string(lastNumber)))
+	lastKeySplit := strings.Split(string(lastKey), "-")
+	lastCntInt, err := strconv.Atoi(strings.TrimSpace(lastKeySplit[1]))
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	return lastNumberInt, nil
+	lastYear := strings.TrimSpace(lastKeySplit[0])
+	if lastYear == thisYear {
+		return thisYear + "-" + strconv.Itoa(lastCntInt+1), nil
+	}
+	return thisYear + "-1", nil
 }
 
 func addRtNumber(task Task, msg *imap.Message, mr *message.Entity) error {
 	subject := mr.Header.Get("Subject")
-	if strings.HasPrefix(subject, "[RT #") {
+	tag := task.RtTag
+	if tag == "" {
+		tag = "UnSpammer"
+	}
+	if strings.Contains(subject, "["+tag+" -") {
+		sl.Infof("%s: subject already tagged: %s", task._name, subject)
 		return nil
 	}
 	sl.Infof("%s: adding RT number", task._name)
 	rtCounterFile := fmt.Sprintf("%s.cnt", task._name)
-	lastNumberInt, err := getLastRtNumber(task)
+	nextRtNumber, err := getNextRtKey(task)
 	if err != nil {
 		return err
 	}
-	mr.Header.Set("Subject", fmt.Sprintf(
-		"[RT #%d] %s", lastNumberInt+1, subject))
+
+	mr.Header.Set("Subject", fmt.Sprintf("[%s - %s] %s", tag, nextRtNumber, subject))
+	sl.Infof("%s: subject tagged with %s", task._name, nextRtNumber)
+
 	newPath := fmt.Sprintf("%s.%d", rtCounterFile, rand.Uint64())
 	if err := os.WriteFile(newPath,
-		[]byte(strconv.Itoa(lastNumberInt+1)), 0644); err != nil {
+		[]byte(nextRtNumber), 0644); err != nil {
 		return err
 	}
 	return os.Rename(newPath, rtCounterFile)

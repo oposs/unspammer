@@ -100,6 +100,11 @@
                                 "no"
                             ]
                         },
+                        "rtTag": {
+                            "type": "string",
+                            "description": "string to recognize already tagged emails",
+                            "default": "UnSpammer"
+                        },
                         "storeCopyIn": {
                             "type": "string",
                             "description": "Folder for storing the edited message"
