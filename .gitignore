@@ -5,3 +5,4 @@ unspammer-*
 unspammer
 *.cnt
 *~
+config-test.yaml

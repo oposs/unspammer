@@ -23,6 +23,7 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/emersion/go-message"
+	_ "github.com/emersion/go-message/charset"
 	"github.com/emersion/go-message/textproto"
 	"github.com/google/go-jsonnet"
 	"github.com/kardianos/service"
@@ -61,6 +62,24 @@ type Task struct {
 	_name         string
 	_client       *client.Client
 }
+
+// type FullMessage struct {
+// 	Header  message.Header
+// 	RawBody []byte
+// 	Body    message.Entity
+// }
+
+// func NewFullMessage(imapMsg imap.Literal) (*FullMessage, error) {
+// 	mr, err := message.Read(imapMsg)
+// 	if err != nil && !message.IsUnknownCharset(err) {
+// 		return nil, err
+// 	}
+// 	return &FullMessage{
+// 		Header: mr.Header,
+// 		//RawBody: imapMsg.,
+// 		//Body: mr.Body,
+// 	}, nil
+// }
 
 var sl service.Logger
 
@@ -384,9 +403,14 @@ func scanMailbox(task Task) chan error {
 
 		messages := make(chan *imap.Message, 10)
 		doneFetching := make(chan error, 1)
-		section := &imap.BodySectionName{}
-		section.Peek = true // don't mark the message as read
-		items := []imap.FetchItem{section.FetchItem(), imap.FetchFlags, imap.FetchUid}
+		sectionHeader, _ := imap.ParseBodySectionName(imap.FetchItem("BODY[HEADER]"))
+		//		section := &imap.BodySectionName{}
+		sectionHeader.Peek = true // don't mark the message as read
+		sectionBody, _ := imap.ParseBodySectionName(imap.FetchItem("BODY[TEXT]"))
+		//		section := &imap.BodySectionName{}
+		sectionBody.Peek = true // don't mark the message as read
+
+		items := []imap.FetchItem{sectionHeader.FetchItem(), sectionBody.FetchItem(), imap.FetchFlags, imap.FetchUid}
 		go func() {
 			doneFetching <- c.Fetch(seqset, items, messages)
 		}()
@@ -402,19 +426,28 @@ func scanMailbox(task Task) chan error {
 					oldFlags = append(oldFlags, flag)
 				}
 			}
-			r := msg.GetBody(section)
-			if r == nil {
-				sl.Infof("%s: server didn't returned message body", task._name)
+			rHead := msg.GetBody(sectionHeader)
+			if rHead == nil {
+				sl.Infof("%s: server didn't return message head", task._name)
 				continue
 			}
+			//sl.Infof("%s: message header %d: %v", task._name, msg.SeqNum, rHead)
+			rBody := msg.GetBody(sectionBody)
+			if rBody == nil {
+				sl.Infof("%s: server didn't return message body  ", task._name)
+				continue
+			}
+			// sl.Infof("%s: message body %d: %v", task._name, msg.SeqNum, rBody)
 			// parse the message header using  the mail reader
-			mr, err := message.Read(r)
+			mr, err := message.Read(rHead)
+
 			if err != nil && !message.IsUnknownCharset(err) {
 				sl.Infof("%s: reader trouble: %v", task._name, err)
 				continue
 			}
 
 			header := mr.Header
+
 			subject, _ := header.Text("Subject")
 			switch task.SelectMessage {
 			case "spam":
@@ -447,17 +480,19 @@ func scanMailbox(task Task) chan error {
 				sl.Infof("%s: tagging problem: %v", task._name, err)
 				continue
 			}
-
+			returnPath := mr.Header.Get("Return-Path")
+			mr.Header.Del("Return-Path")
+			rawMessage := makeRawMessage(mr, rBody)
 			if task.ForwardCopyTo != "" {
 				sl.Infof("%s: forwarding msg to %s\n", task._name, task.ForwardCopyTo)
-				if err := forwardMessage(task, mr); err != nil {
+				if err := forwardMessage(task, rawMessage, returnPath); err != nil {
 					sl.Infof("%s: SMTP problem: %v", task._name, err)
 					continue
 				}
 			}
 			if task.StoreCopyIn != "" {
 				sl.Infof("%s: storing unspammed msg in: %s\n", task._name, task.StoreCopyIn)
-				if err := saveMessage(task, mr, oldFlags); err != nil {
+				if err := saveMessage(task, rawMessage, oldFlags); err != nil {
 					sl.Infof("%s: storing issue: %v", task._name, err)
 					continue
 				}
@@ -486,20 +521,17 @@ func addMessageFlag(task Task, msg *imap.Message, flag string) error {
 	return c.UidStore(seqset, item, flags, nil)
 }
 
-func saveMessage(task Task, mr *message.Entity, oldFlags []string) error {
+func saveMessage(task Task, rawMessage *bytes.Buffer, oldFlags []string) error {
 	// Append it to INBOX, with two flags
 	flags := []string{"usp-" + task._name}
 	flags = append(flags, oldFlags...)
 	c := task._client
 	mailbox := task.StoreCopyIn
-	rawMessage := makeRawMessage(mr)
 	return c.Append(mailbox, flags, time.Now(), rawMessage)
 }
 
-func forwardMessage(task Task, mr *message.Entity) error {
-	returnPath := mr.Header.Get("Return-Path")
-	mr.Header.Del("Return-Path")
-	rawMessage := makeRawMessage(mr)
+func forwardMessage(task Task, rawMessage *bytes.Buffer, returnPath string) error {
+
 	return smtp.SendMail(task._smtpAccount.Server, nil, returnPath, []string{task.ForwardCopyTo}, rawMessage.Bytes())
 }
 
@@ -529,7 +561,7 @@ func addRtNumber(task Task, msg *imap.Message, mr *message.Entity) error {
 	if tag == "" {
 		tag = "UnSpammer"
 	}
-	if strings.Contains(subject, "["+tag+" -") {
+	if strings.Contains(subject, "["+tag+" ") {
 		sl.Infof("%s: subject already tagged: %s", task._name, subject)
 		return nil
 	}
@@ -570,10 +602,10 @@ func removeSpamassassinHeaders(msg *message.Entity) {
 	header.Set("X-Unspammer-Blessing", "BLESSED")
 }
 
-func makeRawMessage(mr *message.Entity) *bytes.Buffer {
+func makeRawMessage(mr *message.Entity, body imap.Literal) *bytes.Buffer {
 	rawMessage := new(bytes.Buffer)
 	textproto.WriteHeader(rawMessage, mr.Header.Header)
-	io.Copy(rawMessage, mr.Body)
+	io.Copy(rawMessage, body)
 	return rawMessage
 }
 
