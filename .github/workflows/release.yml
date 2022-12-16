@@ -7,16 +7,16 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        goos: [linux, windows, darwin]
+        goos: [linux, windows, darwin, illumos]
         goarch: [amd64]
         include:  
           - goarch: arm64
             goos: darwin 
     steps:
     - uses: actions/checkout@v2
-    - uses: wangyoucao577/go-release-action@v1.22
+    - uses: wangyoucao577/go-release-action@v1.33
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         goos: ${{ matrix.goos }}
         goarch: ${{ matrix.goarch }}
-        extra_files: README.md
+        extra_files: README.md LICENSE.md
