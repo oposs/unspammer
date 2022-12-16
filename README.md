@@ -56,7 +56,7 @@ tasks:
     forwardCopyTo: somewhere@other.xxx
     # remove the original
     deleteMessage: true
-   forward:
+  forward:
     imapAccount: support
     smtpAccount: smtp
     watchFolder: Inbox
