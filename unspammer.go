@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -476,10 +477,6 @@ func scanMailbox(task Task) chan error {
 				// do nothing
 			}
 
-			if err := addMessageFlag(task, msg, "usp-"+task._name); err != nil {
-				sl.Infof("%s: tagging problem: %v", task._name, err)
-				continue
-			}
 			returnPath := mr.Header.Get("Return-Path")
 			mr.Header.Del("Return-Path")
 			rawMessage := makeRawMessage(mr, rBody)
@@ -496,6 +493,11 @@ func scanMailbox(task Task) chan error {
 					sl.Infof("%s: storing issue: %v", task._name, err)
 					continue
 				}
+			}
+			// tag after the deal is done
+			if err := addMessageFlag(task, msg, "usp-"+task._name); err != nil {
+				sl.Infof("%s: tagging problem: %v", task._name, err)
+				continue
 			}
 			if task.DeleteMessage {
 				sl.Infof("%s: removing message ...", task._name)
@@ -532,7 +534,7 @@ func saveMessage(task Task, rawMessage *bytes.Buffer, oldFlags []string) error {
 
 func forwardMessage(task Task, rawMessage *bytes.Buffer, returnPath string) error {
 
-	return smtp.SendMail(task._smtpAccount.Server, nil, returnPath, []string{task.ForwardCopyTo}, rawMessage.Bytes())
+	return sendMail(task._smtpAccount.Server, returnPath, []string{task.ForwardCopyTo}, rawMessage.Bytes())
 }
 
 func getNextRtKey(task Task) (string, error) {
@@ -653,4 +655,54 @@ func toStringKeys(val interface{}) (interface{}, error) {
 	default:
 		return val, nil
 	}
+}
+
+func validateLine(line string) error {
+	if strings.ContainsAny(line, "\n\r") {
+		return errors.New("smtp: A line must not contain CR or LF")
+	}
+	return nil
+}
+
+func sendMail(addr string, from string, to []string, msg []byte) error {
+	if err := validateLine(from); err != nil {
+		return err
+	}
+	for _, recp := range to {
+		if err := validateLine(recp); err != nil {
+			return err
+		}
+	}
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		config := &tls.Config{ServerName: "dummy-name", InsecureSkipVerify: true}
+		if err = c.StartTLS(config); err != nil {
+			return err
+		}
+	}
+	if err = c.Mail(from); err != nil {
+		return err
+	}
+	for _, addr := range to {
+		if err = c.Rcpt(addr); err != nil {
+			return err
+		}
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(msg)
+	if err != nil {
+		return err
+	}
+	err = w.Close()
+	if err != nil {
+		return err
+	}
+	return c.Quit()
 }
