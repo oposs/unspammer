@@ -1,14 +1,21 @@
-# unspammer
+# unspammer the IMAP robot
 
 Unspammer watches IMAP folders of your choice and acts on mail arriving in these folders.
 
 Unspammer can do the following:
 
-* remove SpamAssassin headers from mail, accidentely tagged as spam
+* remove SpamAssassin headers from mail, accidentally tagged as spam
 * forward mail to another address
 * add a running counter to the subject of the mail to act as a ticket number
 
+Unspammer is written on golang. It can act on multiple IMAP accounts in parallel.
+
+If you have complex configuration needs, you can use jsonnet for configuration.
+
+## Installation
+
 To install unspammer as a service, run `unspammer -config path/to/config.yaml -service install`
+
 ## Sample Config File
 
 Config formats supported: `yaml`, `json` and `jsonnet`
