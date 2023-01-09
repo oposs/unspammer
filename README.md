@@ -53,7 +53,8 @@ tasks:
     # we add a running counter to the subject
     editCopy: rt-tag
     # forward the mail
-    forwardCopyTo: somewhere@other.xxx
+    forwardCopiesTo:
+      - somewhere@other.xxx
     # remove the original
     deleteMessage: true
   forward:
@@ -65,7 +66,8 @@ tasks:
     # no message editing
     editCopy: no
     # forward the mail
-    forwardCopyTo: rt@cloud-mail.oetiker.ch    
+    forwardCopiesTo:
+      - rt@cloud-mail.oetiker.ch    
     # remove the original
     deleteMessage: true
  ```
