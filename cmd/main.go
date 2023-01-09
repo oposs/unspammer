@@ -49,19 +49,19 @@ type SmtpAccount struct {
 	Server string `yaml:"server"`
 }
 type Task struct {
-	ImapAccount   string `yaml:"imapAccount"`
-	SmtpAccount   string `yaml:"smtpAccount"`
-	WatchFolder   string `yaml:"watchFolder"`
-	SelectMessage string `yaml:"selectMessage"`
-	EditCopy      string `yaml:"editCopy"`
-	StoreCopyIn   string `yaml:"storeCopyIn"`
-	ForwardCopyTo string `yaml:"forwardCopyTo"`
-	DeleteMessage bool   `yaml:"deleteMessage"`
-	RtTag         string `yaml:"rtTag"`
-	_imapAccount  ImapAccount
-	_smtpAccount  SmtpAccount
-	_name         string
-	_client       *client.Client
+	ImapAccount     string   `yaml:"imapAccount"`
+	SmtpAccount     string   `yaml:"smtpAccount"`
+	WatchFolder     string   `yaml:"watchFolder"`
+	SelectMessage   string   `yaml:"selectMessage"`
+	EditCopy        string   `yaml:"editCopy"`
+	StoreCopyIn     string   `yaml:"storeCopyIn"`
+	ForwardCopiesTo []string `yaml:"forwardCopiesTo"`
+	DeleteMessage   bool     `yaml:"deleteMessage"`
+	RtTag           string   `yaml:"rtTag"`
+	_imapAccount    ImapAccount
+	_smtpAccount    SmtpAccount
+	_name           string
+	_client         *client.Client
 }
 
 // type FullMessage struct {
@@ -480,8 +480,9 @@ func scanMailbox(task Task) chan error {
 			returnPath := mr.Header.Get("Return-Path")
 			mr.Header.Del("Return-Path")
 			rawMessage := makeRawMessage(mr, rBody)
-			if task.ForwardCopyTo != "" {
-				sl.Infof("%s: forwarding msg to %s\n", task._name, task.ForwardCopyTo)
+
+			if len(task.ForwardCopiesTo) > 0 {
+				sl.Infof("%s: forwarding msg to %s\n", task._name, strings.Join(task.ForwardCopiesTo, ", "))
 				if err := forwardMessage(task, rawMessage, returnPath); err != nil {
 					sl.Infof("%s: SMTP problem: %v", task._name, err)
 					continue
@@ -534,7 +535,7 @@ func saveMessage(task Task, rawMessage *bytes.Buffer, oldFlags []string) error {
 
 func forwardMessage(task Task, rawMessage *bytes.Buffer, returnPath string) error {
 
-	return sendMail(task._smtpAccount.Server, returnPath, []string{task.ForwardCopyTo}, rawMessage.Bytes())
+	return sendMail(task._smtpAccount.Server, returnPath, task.ForwardCopiesTo, rawMessage.Bytes())
 }
 
 func getNextRtKey(task Task) (string, error) {

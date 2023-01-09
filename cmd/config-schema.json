@@ -109,8 +109,11 @@
                             "type": "string",
                             "description": "Folder for storing the edited message"
                         },
-                        "forwardCopyTo": {
-                            "type": "string",
+                        "forwardCopiesTo": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            },
                             "description": "Forward the edited message to ..."
                         },
                         "deleteMessage": {
