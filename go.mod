@@ -1,6 +1,6 @@
 module github.com/oposs/unspammer
 
-go 1.19
+go 1.26
 
 require (
 	github.com/emersion/go-imap v1.2.1

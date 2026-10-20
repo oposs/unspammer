@@ -1,0 +1,14 @@
+version: "2"
+
+linters:
+  settings:
+    errcheck:
+      # The service logger reports its own write failures nowhere a caller
+      # could act on; a failed log line must not stop mail handling.
+      exclude-functions:
+        - (github.com/kardianos/service.Logger).Error
+        - (github.com/kardianos/service.Logger).Errorf
+        - (github.com/kardianos/service.Logger).Info
+        - (github.com/kardianos/service.Logger).Infof
+        - (github.com/kardianos/service.Logger).Warning
+        - (github.com/kardianos/service.Logger).Warningf
