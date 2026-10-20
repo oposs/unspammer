@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   binaries:
-    uses: oposs/repo-infra/.github/workflows/ri-release-go-binaries.yml@v2
+    uses: oposs/repo-infra/.github/workflows/ri-release-go-binaries.yml@feat/ri-release-go-binaries
     with:
       version: ${{ inputs.version }}
       ref: ${{ inputs.ref }}
