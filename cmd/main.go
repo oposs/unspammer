@@ -28,6 +28,7 @@ import (
 	"github.com/emersion/go-message/textproto"
 	"github.com/google/go-jsonnet"
 	"github.com/kardianos/service"
+	"github.com/oposs/unspammer"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 	"gopkg.in/yaml.v3"
 )
@@ -102,7 +103,12 @@ var jsonetDump = flag.Bool("jsonnetdump", false, "dump generated json to stdout"
 
 func main() {
 	svcFlag := flag.String("service", "", "control the system service")
+	versionFlag := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *versionFlag {
+		fmt.Println(unspammer.Version())
+		return
+	}
 	options := make(service.KeyValue)
 	options["Restart"] = "on-success"
 	options["SuccessExitStatus"] = "1 2 8 SIGKILL"
