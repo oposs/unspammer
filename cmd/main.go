@@ -415,8 +415,19 @@ func scanMailbox(task Task) chan error {
 		go func() {
 			doneFetching <- c.Fetch(seqset, items, messages)
 		}()
-	nextMessage:
+		// collect all messages and wait for the FETCH to complete before
+		// issuing further commands; the tagged FETCH response would otherwise
+		// cancel the literal of a concurrent APPEND
+		fetched := []*imap.Message{}
 		for msg := range messages {
+			fetched = append(fetched, msg)
+		}
+		if err := <-doneFetching; err != nil {
+			errChan <- err
+			return
+		}
+	nextMessage:
+		for _, msg := range fetched {
 			oldFlags := []string{}
 			for _, flag := range msg.Flags {
 				if flag == "usp-"+task._name {
@@ -508,7 +519,7 @@ func scanMailbox(task Task) chan error {
 				}
 			}
 		}
-		errChan <- <-doneFetching
+		errChan <- nil
 		sl.Infof("%s: scanning complete", task._name)
 	}()
 	return errChan
