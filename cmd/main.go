@@ -190,8 +190,7 @@ func (p *program) run() {
 				if task._client == nil {
 					if err := getClient(&task); err != nil {
 						sl.Infof("%s: error connecting to %s: %s\n", task._name, imapAccount.Server, err)
-						_ = task._client.Terminate()
-						task._client = nil
+						closeClient(&task)
 						time.Sleep(time.Second * 15)
 						continue loop
 					}
@@ -201,15 +200,13 @@ func (p *program) run() {
 				case err := <-scanMailbox(task):
 					if err != nil {
 						sl.Infof("%s: error scanning messages: %v", task._name, err)
-						_ = task._client.Terminate()
-						task._client = nil
+						closeClient(&task)
 						time.Sleep(time.Second * 15)
 						continue loop
 					}
 				case <-time.After(1 * time.Minute):
 					sl.Infof("%s: timeout scanning messages", task._name)
-					_ = task._client.Terminate()
-					task._client = nil
+					closeClient(&task)
 					continue loop
 				}
 				// wait for folder change
@@ -217,15 +214,13 @@ func (p *program) run() {
 				case err := <-watchFolder(task):
 					if err != nil {
 						sl.Infof("%s: error watch folder: %v", task._name, err)
-						_ = task._client.Terminate()
-						task._client = nil
+						closeClient(&task)
 						time.Sleep(time.Second * 15)
 						continue loop
 					}
 				case <-time.After(60 * time.Minute):
 					sl.Infof("%s: timeout watch folder", task._name)
-					_ = task._client.Terminate()
-					task._client = nil
+					closeClient(&task)
 					continue loop
 				}
 
@@ -267,7 +262,7 @@ func readConfig(cfgFile string) (Config, error) {
 			return Config{}, err
 		}
 		if *jsonetDump {
-			sl.Infof("json: %s", jsonString)
+			fmt.Println(jsonString)
 		}
 		if err := json.Unmarshal([]byte(jsonString), &m); err != nil {
 			return Config{}, err
@@ -321,6 +316,16 @@ func readConfig(cfgFile string) (Config, error) {
 		}
 	}
 	return config, err
+}
+
+// closeClient drops the IMAP connection of a task. The client is nil when
+// DialTLS itself failed, and Terminate on a nil client panicked on the first
+// connection error.
+func closeClient(task *Task) {
+	if task._client != nil {
+		_ = task._client.Terminate()
+	}
+	task._client = nil
 }
 
 func getClient(task *Task) error {
@@ -566,10 +571,17 @@ func getNextRtKey(task Task) (string, error) {
 	lastKey, err := os.ReadFile(rtCounterFile)
 	thisYear := strconv.Itoa(time.Now().Year() - 2000)
 
+	// A task that has never tagged a message starts the count at 1.
+	if errors.Is(err, os.ErrNotExist) {
+		return thisYear + "-1", nil
+	}
 	if err != nil {
 		return "", err
 	}
 	lastKeySplit := strings.Split(string(lastKey), "-")
+	if len(lastKeySplit) != 2 {
+		return "", fmt.Errorf("%s: expected YY-N, found %q", rtCounterFile, strings.TrimSpace(string(lastKey)))
+	}
 	lastCntInt, err := strconv.Atoi(strings.TrimSpace(lastKeySplit[1]))
 	if err != nil {
 		return "", err

@@ -20,6 +20,9 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - unspammer installs from `.deb` and `.rpm` packages in the package registry at gitea.oetiker.ch, and on macOS and Linux with Homebrew (`brew install oposs/unspammer/unspammer`).
 
 ### Fixed
+- unspammer crashed with `panic: runtime error: invalid memory address or nil pointer dereference` when it could not reach an IMAP server, instead of retrying after 15 seconds.
+- A task with `editCopy: rt-tag` no longer stops the start when its `<task>.cnt` file is missing; the count starts at 1. A counter file without a `-`, for example `26`, crashed unspammer with `index out of range`; it now stops the start with a message that names the file.
+- `-jsonnetdump` now prints the JSON to standard output, as its help text says, instead of to the service log.
 - A message that a task stored with `storeCopyIn` was handled again on every scan, and the log showed `cannot send literal: no continuation request received`. The copy is now stored after the folder scan has finished, so each message is handled once. (#5)
 
 ## 0.4.0 - 2023-01-09

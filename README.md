@@ -62,7 +62,7 @@ unspammer -service start
 ## Options
 
 - `-config <file>`: The configuration file. The default is `/etc/unspammer/config.yaml`.
-- `-jsonnetdump`: Log the JSON that a Jsonnet configuration file produces.
+- `-jsonnetdump`: Print the JSON that a Jsonnet configuration file produces to standard output.
 - `-service <action>`: Control the system service: `install`, `uninstall`, `start`, `stop` or `restart`.
 - `-version`: Print the version and exit.
 
@@ -99,7 +99,7 @@ tasks:
     smtpAccount: smtp
     watchFolder: INBOX/UnSpammed
     selectMessage: ham
-    # add a running number to the subject; needs ticket.cnt next to the config
+    # add a running number to the subject; the count is kept in ticket.cnt
     editCopy: rt-tag
     forwardCopiesTo:
       - rt@example.com

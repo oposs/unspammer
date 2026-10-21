@@ -3,7 +3,7 @@ title: UNSPAMMER
 section: 8
 header: unspammer manual
 footer: unspammer
-date: 2026-10-20
+date: 2026-10-21
 ---
 
 # NAME
@@ -94,7 +94,7 @@ tasks:
 # OPTIONS
 
 - `-config <file>`: The configuration file. The default is `/etc/unspammer/config.yaml`.
-- `-jsonnetdump`: Log the JSON that a Jsonnet configuration file produces.
+- `-jsonnetdump`: Print the JSON that a Jsonnet configuration file produces to standard output.
 - `-service <action>`: Control the system service and exit. The actions are `install`, `uninstall`, `start`, `stop` and `restart`. `install` registers the service with the **-config** given on the same command line.
 - `-version`: Print the version and exit.
 
@@ -106,7 +106,7 @@ and when a **-service** action fails.
 # FILES
 
 - `/etc/unspammer/config.yaml`: The default configuration file.
-- `<task>.cnt`: The last running number of a task with `editCopy: rt-tag`, in the directory of the configuration file. The file holds *YY*`-`*N*, for example `26-0`. It must exist before the first start; **unspammer** exits when it is missing. The number restarts at 1 in a new year.
+- `<task>.cnt`: The last running number of a task with `editCopy: rt-tag`, in the directory of the configuration file. The file holds *YY*`-`*N*, for example `26-0`. When the file is missing, the count starts at 1. **unspammer** exits at startup when the file holds anything else than *YY*`-`*N*. The number restarts at 1 in a new year.
 
 # NOTES
 
