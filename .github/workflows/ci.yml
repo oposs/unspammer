@@ -41,14 +41,6 @@ jobs:
     with:
       ref: ${{ inputs.ref }}
 
-  # PROOF ONLY: build the release on the pull request to prove the new
-  # ri-release-go-binaries piece with nfpm and homebrew. Revert before merge.
-  release-build-proof:
-    uses: ./.github/workflows/release-build.yml
-    with:
-      version: 0.4.99
-      ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
   # D28 release mode, decided by repo-infra (D33). It runs on every event and
   # carries no D31 skip: on the release pull request Create release PR opened,
   # this verdict is what ci-passed decides on.
@@ -76,7 +68,7 @@ jobs:
   # PR tested exactly the head that carries the release-built status.
   ci-passed:
     if: always()
-    needs: [go, man, release-pr-current, release-build-proof, release-verdict]
+    needs: [go, man, release-pr-current, release-verdict]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
