@@ -1,73 +1,116 @@
-# unspammer the IMAP robot
+# unspammer, the IMAP robot
 
-Unspammer watches IMAP folders of your choice and acts on mail arriving in these folders.
+[![CI](https://github.com/oposs/unspammer/actions/workflows/ci.yml/badge.svg)](https://github.com/oposs/unspammer/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/oposs/unspammer)](https://github.com/oposs/unspammer/releases/latest)
 
-Unspammer can do the following:
+unspammer watches IMAP folders and acts on the mail that arrives in them.
+For each new message it can:
 
-* remove SpamAssassin headers from mail, accidentally tagged as spam
-* forward mail to another address
-* add a running counter to the subject of the mail to act as a ticket number
+* remove the SpamAssassin headers from mail that was tagged as spam by mistake
+* store an edited copy in another folder
+* forward the message to one or more addresses
+* add a running number to the subject, to serve as a ticket number
 
-Unspammer is written on golang. It can act on multiple IMAP accounts in parallel.
+One unspammer process serves several IMAP accounts and folders in parallel.
+The configuration is YAML, JSON or Jsonnet.
 
-If you have complex configuration needs, you can use jsonnet for configuration.
+Release archives exist for Linux (amd64, arm64), macOS (Intel, Apple Silicon), Windows (amd64, arm64) and illumos.
 
-## Installation
+## Install
 
-To install unspammer as a service, run `unspammer -config path/to/config.yaml -service install`
+Debian and Ubuntu:
 
-## Sample Config File
+```sh
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL -o /etc/apt/keyrings/gitea-oposs.asc https://gitea.oetiker.ch/api/packages/oposs/debian/repository.key
+echo "deb [signed-by=/etc/apt/keyrings/gitea-oposs.asc] https://gitea.oetiker.ch/api/packages/oposs/debian stable main" | sudo tee /etc/apt/sources.list.d/oposs.list
+sudo apt update && sudo apt install unspammer
+```
 
-Config formats supported: `yaml`, `json` and `jsonnet`
+Fedora, RHEL, Rocky and Alma, with dnf4 and dnf5 alike:
+
+```sh
+sudo curl -fsSL -o /etc/yum.repos.d/oposs.repo https://gitea.oetiker.ch/api/packages/oposs/rpm.repo
+sudo dnf install unspammer
+```
+
+Homebrew:
+
+```sh
+brew tap oposs/unspammer https://github.com/oposs/unspammer
+brew trust --formula oposs/unspammer/unspammer
+brew install unspammer
+```
+
+`brew trust` exists from Homebrew 6 on; skip it on older versions.
+
+mise:
+
+```sh
+mise use -g github:oposs/unspammer
+```
+
+Direct download: <https://github.com/oposs/unspammer/releases/latest>
+
+## Run as a service
+
+```sh
+unspammer -config /etc/unspammer/config.yaml -service install
+unspammer -service start
+```
+
+## Options
+
+- `-config <file>`: The configuration file. The default is `/etc/unspammer/config.yaml`.
+- `-jsonnetdump`: Print the JSON that a Jsonnet configuration file produces to standard output.
+- `-service <action>`: Control the system service: `install`, `uninstall`, `start`, `stop` or `restart`.
+- `-version`: Print the version and exit.
+
+The manual, [docs/manual.md](docs/manual.md), describes every configuration key.
+
+## Sample configuration
 
 ```yaml
 imapAccounts:
   support:
-    username: "tobi@xxx.ch"
-    password: "asdfasdf"
-    server: "aaa.xxx.ch:993"
+    username: "support@example.com"
+    password: "secret"
+    server: "imap.example.com:993"
 
 smtpAccounts:
   smtp:
-    server: "bbb.xxx.ch:25"
+    server: "smtp.example.com:25"
 
 tasks:
   unspam:
     imapAccount: support
     smtpAccount: smtp
     watchFolder: INBOX/DeSpamMe
-    # we only act on SpamAssassin detected spam
+    # act only on mail SpamAssassin flagged as spam
     selectMessage: spam
-    # remove SpamAssassin Headers
+    # remove the SpamAssassin headers
     editCopy: un-spam
-    # save copy into folder UnSpammed
+    # store the copy in INBOX/UnSpammed
     storeCopyIn: INBOX/UnSpammed
-    # delete original message
+    # delete the original message
     deleteMessage: true
-  minrt:
+  ticket:
     imapAccount: support
     smtpAccount: smtp
     watchFolder: INBOX/UnSpammed
-    # we only act on non-spam
     selectMessage: ham
-    # we add a running counter to the subject
+    # add a running number to the subject; the count is kept in ticket.cnt
     editCopy: rt-tag
-    # forward the mail
     forwardCopiesTo:
-      - somewhere@other.xxx
-    # remove the original
+      - rt@example.com
     deleteMessage: true
   forward:
     imapAccount: support
     smtpAccount: smtp
-    watchFolder: Inbox
-    # we only act on non-spam
+    watchFolder: INBOX
     selectMessage: ham
-    # no message editing
-    editCopy: no
-    # forward the mail
+    editCopy: "no"
     forwardCopiesTo:
-      - rt@cloud-mail.oetiker.ch    
-    # remove the original
+      - helpdesk@example.com
     deleteMessage: true
- ```
+```

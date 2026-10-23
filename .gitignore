@@ -6,3 +6,5 @@ unspammer
 *.cnt
 *~
 config-test.yaml
+man/
+bin/

@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/smtp"
@@ -28,6 +27,7 @@ import (
 	"github.com/emersion/go-message/textproto"
 	"github.com/google/go-jsonnet"
 	"github.com/kardianos/service"
+	"github.com/oposs/unspammer"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 	"gopkg.in/yaml.v3"
 )
@@ -102,7 +102,12 @@ var jsonetDump = flag.Bool("jsonnetdump", false, "dump generated json to stdout"
 
 func main() {
 	svcFlag := flag.String("service", "", "control the system service")
+	versionFlag := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *versionFlag {
+		fmt.Println(unspammer.Version())
+		return
+	}
 	options := make(service.KeyValue)
 	options["Restart"] = "on-success"
 	options["SuccessExitStatus"] = "1 2 8 SIGKILL"
@@ -154,7 +159,10 @@ func main() {
 func (p *program) run() {
 	sl.Infof("Starting UnSpammer on %v.", service.Platform())
 	// status files are stored alongside the config file ... so go there
-	os.Chdir(filepath.Dir(*cfgPath))
+	if err := os.Chdir(filepath.Dir(*cfgPath)); err != nil {
+		sl.Errorf("error changing to the config directory: %v", err)
+		os.Exit(1)
+	}
 
 	cfg, err := readConfig(*cfgPath)
 	if err != nil {
@@ -182,8 +190,7 @@ func (p *program) run() {
 				if task._client == nil {
 					if err := getClient(&task); err != nil {
 						sl.Infof("%s: error connecting to %s: %s\n", task._name, imapAccount.Server, err)
-						task._client.Terminate()
-						task._client = nil
+						closeClient(&task)
 						time.Sleep(time.Second * 15)
 						continue loop
 					}
@@ -193,15 +200,13 @@ func (p *program) run() {
 				case err := <-scanMailbox(task):
 					if err != nil {
 						sl.Infof("%s: error scanning messages: %v", task._name, err)
-						task._client.Terminate()
-						task._client = nil
+						closeClient(&task)
 						time.Sleep(time.Second * 15)
 						continue loop
 					}
 				case <-time.After(1 * time.Minute):
 					sl.Infof("%s: timeout scanning messages", task._name)
-					task._client.Terminate()
-					task._client = nil
+					closeClient(&task)
 					continue loop
 				}
 				// wait for folder change
@@ -209,15 +214,13 @@ func (p *program) run() {
 				case err := <-watchFolder(task):
 					if err != nil {
 						sl.Infof("%s: error watch folder: %v", task._name, err)
-						task._client.Terminate()
-						task._client = nil
+						closeClient(&task)
 						time.Sleep(time.Second * 15)
 						continue loop
 					}
 				case <-time.After(60 * time.Minute):
 					sl.Infof("%s: timeout watch folder", task._name)
-					task._client.Terminate()
-					task._client = nil
+					closeClient(&task)
 					continue loop
 				}
 
@@ -230,7 +233,7 @@ func (p *program) run() {
 
 func readConfig(cfgFile string) (Config, error) {
 
-	cfgString, err := ioutil.ReadFile(cfgFile)
+	cfgString, err := os.ReadFile(cfgFile)
 	if err != nil {
 		return Config{}, err
 	}
@@ -259,7 +262,7 @@ func readConfig(cfgFile string) (Config, error) {
 			return Config{}, err
 		}
 		if *jsonetDump {
-			sl.Infof("json: %s", jsonString)
+			fmt.Println(jsonString)
 		}
 		if err := json.Unmarshal([]byte(jsonString), &m); err != nil {
 			return Config{}, err
@@ -313,6 +316,16 @@ func readConfig(cfgFile string) (Config, error) {
 		}
 	}
 	return config, err
+}
+
+// closeClient drops the IMAP connection of a task. The client is nil when
+// DialTLS itself failed, and Terminate on a nil client panicked on the first
+// connection error.
+func closeClient(task *Task) {
+	if task._client != nil {
+		_ = task._client.Terminate()
+	}
+	task._client = nil
 }
 
 func getClient(task *Task) error {
@@ -490,7 +503,11 @@ func scanMailbox(task Task) chan error {
 
 			returnPath := mr.Header.Get("Return-Path")
 			mr.Header.Del("Return-Path")
-			rawMessage := makeRawMessage(mr, rBody)
+			rawMessage, err := makeRawMessage(mr, rBody)
+			if err != nil {
+				sl.Infof("%s: error copying message: %v", task._name, err)
+				continue
+			}
 
 			if len(task.ForwardCopiesTo) > 0 {
 				sl.Infof("%s: forwarding msg to %s\n", task._name, strings.Join(task.ForwardCopiesTo, ", "))
@@ -554,10 +571,17 @@ func getNextRtKey(task Task) (string, error) {
 	lastKey, err := os.ReadFile(rtCounterFile)
 	thisYear := strconv.Itoa(time.Now().Year() - 2000)
 
+	// A task that has never tagged a message starts the count at 1.
+	if errors.Is(err, os.ErrNotExist) {
+		return thisYear + "-1", nil
+	}
 	if err != nil {
 		return "", err
 	}
 	lastKeySplit := strings.Split(string(lastKey), "-")
+	if len(lastKeySplit) != 2 {
+		return "", fmt.Errorf("%s: expected YY-N, found %q", rtCounterFile, strings.TrimSpace(string(lastKey)))
+	}
 	lastCntInt, err := strconv.Atoi(strings.TrimSpace(lastKeySplit[1]))
 	if err != nil {
 		return "", err
@@ -616,11 +640,15 @@ func removeSpamassassinHeaders(msg *message.Entity) {
 	header.Set("X-Unspammer-Blessing", "BLESSED")
 }
 
-func makeRawMessage(mr *message.Entity, body imap.Literal) *bytes.Buffer {
+func makeRawMessage(mr *message.Entity, body imap.Literal) (*bytes.Buffer, error) {
 	rawMessage := new(bytes.Buffer)
-	textproto.WriteHeader(rawMessage, mr.Header.Header)
-	io.Copy(rawMessage, body)
-	return rawMessage
+	if err := textproto.WriteHeader(rawMessage, mr.Header.Header); err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(rawMessage, body); err != nil {
+		return nil, err
+	}
+	return rawMessage, nil
 }
 
 func deleteMsg(task Task, msgUid uint32) error {
@@ -689,7 +717,7 @@ func sendMail(addr string, from string, to []string, msg []byte) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if ok, _ := c.Extension("STARTTLS"); ok {
 		config := &tls.Config{ServerName: "dummy-name", InsecureSkipVerify: true}
 		if err = c.StartTLS(config); err != nil {
