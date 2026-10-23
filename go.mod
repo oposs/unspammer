@@ -7,7 +7,7 @@ require (
 	github.com/emersion/go-message v0.16.0
 	github.com/google/go-jsonnet v0.19.1
 	github.com/kardianos/service v1.2.2
-	github.com/santhosh-tekuri/jsonschema/v5 v5.1.1
+	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
