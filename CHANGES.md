@@ -12,6 +12,13 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### New
+
+### Changed
+
+### Fixed
+
+## 0.5.0 - 2026-10-23
+### New
 - `unspammer -version` prints the version.
 - A man page, `unspammer(8)`, ships with every release archive. It documents the options, every configuration key and the `<task>.cnt` counter file.
 
