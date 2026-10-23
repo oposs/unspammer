@@ -27,7 +27,7 @@ echo "deb [signed-by=/etc/apt/keyrings/gitea-oposs.asc] https://gitea.oetiker.ch
 sudo apt update && sudo apt install unspammer
 ```
 
-Fedora, RHEL, Rocky and Alma:
+Fedora, RHEL, Rocky and Alma, with dnf4 and dnf5 alike:
 
 ```sh
 sudo curl -fsSL -o /etc/yum.repos.d/oposs.repo https://gitea.oetiker.ch/api/packages/oposs/rpm.repo
