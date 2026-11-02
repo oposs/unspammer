@@ -14,9 +14,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### New
 
 ### Changed
-- The Homebrew bottle for Apple Silicon Macs now installs on the oldest macOS `unspammer` runs on, not only on macOS 14 Sonoma and later. Until now, `brew install` on an older Mac built the formula from source, which fails when the Command Line Tools are older than the macOS release.
 
 ### Fixed
+
+## 0.5.1 - 2026-11-02
+### Changed
+- The Homebrew bottle for Apple Silicon Macs now installs on the oldest macOS `unspammer` runs on, not only on macOS 14 Sonoma and later. Until now, `brew install` on an older Mac built the formula from source, which fails when the Command Line Tools are older than the macOS release.
 
 ## 0.5.0 - 2026-10-23
 ### New
